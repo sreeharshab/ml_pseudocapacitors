@@ -13,26 +13,31 @@ from matminer.featurizers.composition import ElementProperty
 from pymatgen.analysis.local_env import VoronoiNN
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+root = os.getcwd()
 
 class get_data:
-    def __init__(self, material, addnl_folder_paths=None):
+    def __init__(self, material, fhandle, addnl_folder_paths=None):
         self.material = material
-        self.addnl_folder_paths = addnl_folder_paths
-        if self.addnl_folder_paths is None:
+        if addnl_folder_paths is None:
             os.chdir(material)
-        elif self.addnl_folder_paths is not None:
-            pwd = os.getcwd()
-            self.addnl_folder_paths = [f"{pwd}"] + self.addnl_folder_paths
-            self.addnl_folder_paths = [path+"/" for path in self.addnl_folder_paths]
-            for path in self.addnl_folder_paths:
+        elif addnl_folder_paths is not None:
+            addnl_folder_paths = [f"{root}"] + addnl_folder_paths
+            addnl_folder_paths = [path+"/" for path in addnl_folder_paths]
+            for path in addnl_folder_paths:
                 try:
                     os.chdir(f"{path}"+f"{material}")
                     break
                 except FileNotFoundError:
                     pass
-        self.formula = self.get_formula()
+        self.atoms, self.energy = self.get_atoms_and_energy()
+        self.formula = str(self.atoms.symbols)
+        logging.info(f"Material: {material}, Formula: {self.formula}")
         self.elements = re.findall(r'([A-Z][a-z]?)\d*', self.formula)
         self.structure = self.get_PMG_structure()
+        self.max_void_radius = self.get_max_void_radius()
+        self.intercalation_data = self.get_intercalation_data(fhandle)
+        self.dos_data = self.get_dos_data()
+        self.data = [material, self.formula, self.structure] + self.intercalation_data + [self.max_void_radius] + self.dos_data
         os.chdir("../")
     
     def get_metals(self):
@@ -43,21 +48,16 @@ class get_data:
         bridging_elements = [element for element in self.elements if element in ["O", "S", "C", "N", "Si", "P"]]
         return bridging_elements
     
-    def get_atoms_and_energy(self, dir_name):
+    def get_atoms_and_energy(self, dir_name="Energy_calculation"):
         os.chdir(dir_name)
         atoms = read("OUTCAR@-1")
         energy = atoms.get_potential_energy()
         os.chdir("../")
         return atoms, energy
     
-    def get_formula(self, dir_name='Energy_calculation'):
-        atoms,_ = self.get_atoms_and_energy(dir_name)
-        return str(atoms.symbols)
-    
-    def get_PMG_structure(self, dir_name="Energy_calculation"):
-        atoms,_ = self.get_atoms_and_energy(dir_name)
+    def get_PMG_structure(self):
         data = {
-            "ase atoms": [atoms]
+            "ase atoms": [self.atoms]
         }
         df = pd.DataFrame(data)
         conv = ASEAtomstoStructure()
@@ -69,10 +69,15 @@ class get_data:
         try:
             os.chdir("Electronic_calculation")
             dos = DOS()
-            band_gap = dos.get_band_gap()
-            band_centers = [dos.get_band_centers()[1], dos.get_band_centers()[2]]    
-            os.chdir("../")
-            return [band_gap] + band_centers
+            try:
+                band_gap = dos.get_band_gap()
+                band_centers = [dos.get_band_centers()[1], dos.get_band_centers()[2]]    
+                os.chdir("../")
+                return [band_gap] + band_centers
+            except AssertionError:
+                logging.warning(f"Electronic calculation is not completed for {self.material}. Taking band gap and band centers as 0...")
+                os.chdir("../")
+                return [0,0,0]
         except FileNotFoundError:
             logging.warning(f"Electronic calculation does not exist for {self.material}. Taking band gap and band centers as 0...")
             return [0,0,0]
@@ -104,24 +109,9 @@ class get_data:
         Li_O_distances = []
         for Li_index in Li_indices:
             indices, offsets = nl.get_neighbors(Li_index)
-            row = []
-            for i, offset in zip(indices, offsets):
-                if atoms[i].symbol in self.get_metals():
-                    pos = atoms.positions[i] + offset @ atoms.get_cell()
-                    dist = ((atoms[Li_index].x - pos[0])**2 + (atoms[Li_index].y - pos[1])**2 + (atoms[Li_index].z - pos[2])**2)**(1/2)
-                    row.append(dist)
-            row = np.array(row)
-            Li_M_distances.append(np.mean(row))
-            row = []
-            for i, offset in zip(indices, offsets):
-                if atoms[i].symbol in self.get_bridging_elements():
-                    pos = atoms.positions[i] + offset @ atoms.get_cell()
-                    dist = ((atoms[Li_index].x - pos[0])**2 + (atoms[Li_index].y - pos[1])**2 + (atoms[Li_index].z - pos[2])**2)**(1/2)
-                    row.append(dist)
-            row = np.array(row)
-            Li_O_distances.append(np.mean(row))
-        Li_M_distances = np.array(Li_M_distances)
-        Li_O_distances = np.array(Li_O_distances)
+            distances = np.linalg.norm(atoms.positions[indices] + offsets @ atoms.cell - atoms.positions[Li_index], axis=1)
+            Li_M_distances.append(distances[[atoms[i].symbol in self.get_metals() for i in indices]].mean())
+            Li_O_distances.append(distances[[atoms[i].symbol in self.get_bridging_elements() for i in indices]].mean())
         return round(np.mean(Li_M_distances, axis=0),3), round(np.mean(Li_O_distances, axis=0),3)
     
     def get_Li_charge(self):
@@ -167,26 +157,26 @@ class get_data:
             return Li_M_icohp
     
     def get_intercalation_data(self, fhandle):
-        atoms, energy = self.get_atoms_and_energy("Energy_calculation")
+        atoms = self.atoms
+        energy = self.energy
         volume = atoms.get_volume()
         n_M = len([atom.index for atom in atoms if atom.symbol in self.get_metals()])
-        fhandle.write("\tLithium Intercalation:\n")
+        fhandle.write(f"Material: {self.material}, Formula: {self.formula}:\n")
         os.chdir("Intercalation")
         oswalk = [i for i in os.walk(".")]
         nLifolders = sorted(oswalk[0][1])
         str_format = "{:^15} {:^28} {:^15} {:^23} {:^23} {:^23}\n"
-        fhandle.write("\t")
         fhandle.write(str_format.format("Site", "Li Intercalation Energy (eV)", "Charge on Li", f"Average Li-{self.get_metals()} Distance", f"Average Li-{self.get_bridging_elements()} Distance", f"COHP of Li-{self.get_metals()}"))
         for nLifolder in nLifolders:
             match = re.match(r"(\d+)_Li", nLifolder)
             n_Li = int(match.group(1))
             if n_Li/n_M == 0.25 or n_Li/n_M == 0.5:
+                fhandle.write(f"\tNumber of Li: {n_Li}\n")
                 os.chdir(nLifolder)
                 oswalk = [i for i in os.walk(".")]
                 sites = sorted(oswalk[0][1])
                 Li_energies, volume_changes, final_Li_charges, Li_M_distances, Li_O_distances, Li_M_icohps = [], [], [], [], [], []
                 for site in sites:
-                    fhandle.write("\t")
                     os.chdir(f"{site}")
                     atoms_with_Li, energy_with_Li = self.get_atoms_and_energy("geo_opt")
                     volume_with_Li = atoms_with_Li.get_volume()
@@ -213,71 +203,28 @@ class get_data:
                     data_50 = [Li_energies[mLei], volume_changes[mLei], final_Li_charges[mLei], Li_M_distances[mLei], Li_O_distances[mLei], Li_M_icohps[mLei]]
                 os.chdir("../")
         os.chdir("../")
+        fhandle.write("\n")
         return data_25+data_50
-
-    def compile_data(self, fhandle):
-        material = self.material
-        formula = self.formula
-        logging.info(f"Material: {material}, Formula: {formula}")
-        fhandle.write(f"{material}\n")
-        if self.addnl_folder_paths is None:
-            os.chdir(material)
-        elif self.addnl_folder_paths is not None:
-            for path in self.addnl_folder_paths:
-                try:
-                    os.chdir(f"{path}"+f"{material}")
-                    break
-                except FileNotFoundError:
-                    pass
-        structure = self.structure
-        max_void_radius = self.get_max_void_radius()
-        intercalation_data = self.get_intercalation_data(fhandle)
-        dos_data = self.get_dos_data()
-        os.chdir("../")
-        return [material, formula, structure] + intercalation_data + [max_void_radius] + dos_data
-
-def compute_file_hash(filepath):
-    hasher = hashlib.md5()
-    with open(filepath, 'rb') as f:
-        while chunk := f.read(8192):
-            hasher.update(chunk)
-    return hasher.hexdigest()
-
-def changes_in_code(hash_path):
-    current_hash = compute_file_hash(__file__)
-    try:
-        with open(hash_path, "r") as f:
-            cached_hash = f.read().strip()
-    except FileNotFoundError:
-        cached_hash = None
-    return current_hash != cached_hash
 
 if __name__=="__main__":
     materials = ['LiMn1.5Ni0.5O4', 'LiMn2O4', 'Mo3Nb2O14', 'MoO2', 'TiO2-B', 'TiO2-R', 'VO2-B', 'W3Nb2O14', 'Fe2CN6', 'LiCoO2', 'LiCoPO4', 'LiFeMgPO4', 'LiFePO4', 'LiFeSO4F', 'LiNiO2', 'LiVPO5', 'MoS2', 'NCM333', 'NCM811', 'Nb2O5-B', 'Nb2O5-H', 'Nb2O5-T', 'Nb2O5-TT', 'NbS2', 'TiO2-anatase', 'TiS2', 'V2O5', 'V6O13', 'VO2-M', 'VO2-R', 'Li2FeSiO4', 'Li3+xV2O5']
-    if os.path.exists("cached_dataframe.pkl") and not changes_in_code("code_hash.txt"):
-        df = pd.read_pickle("cached_dataframe.pkl")
-        logging.info("Loaded cached dataframe!")
-    else:
-        pwd = os.getcwd()
-        df = pd.DataFrame(columns=["material", "formula", "structure", "Li Intercalation Energy @ 0.25 Li/M", "Volume Change @ 0.25 Li/M", "Charge on Li @ 0.25 Li/M", f"Average Li-M Distance @ 0.25 Li/M", f"Average Li-O Distance @ 0.25 Li/M", f"COHP of Li-M @ 0.25 Li/M", "Li Intercalation Energy @ 0.50 Li/M", "Volume Change @ 0.50 Li/M", "Charge on Li @ 0.50 Li/M", f"Average Li-M Distance @ 0.50 Li/M", f"Average Li-O Distance @ 0.50 Li/M", f"COHP of Li-M @ 0.50 Li/M", "Maximum Void Radius", "p Band Center", "d Band Center", "Band Gap"])
-        fhandle = open(f"data.txt","w")
-        for material in materials:
-            system = get_data(material, addnl_folder_paths=["/expanse/lustre/scratch/sdutta3/temp_project/DMREF/bulk_calculation-forML/matminer"])
-            next_index = len(df)
-            df.loc[next_index] = system.compile_data(fhandle)
-        os.chdir(pwd)
+    df = pd.DataFrame(columns=["material", "formula", "structure", "Li Intercalation Energy @ 0.25 Li/M", "Volume Change @ 0.25 Li/M", "Charge on Li @ 0.25 Li/M", f"Average Li-M Distance @ 0.25 Li/M", f"Average Li-O Distance @ 0.25 Li/M", f"COHP of Li-M @ 0.25 Li/M", "Li Intercalation Energy @ 0.50 Li/M", "Volume Change @ 0.50 Li/M", "Charge on Li @ 0.50 Li/M", f"Average Li-M Distance @ 0.50 Li/M", f"Average Li-O Distance @ 0.50 Li/M", f"COHP of Li-M @ 0.50 Li/M", "Maximum Void Radius", "p Band Center", "d Band Center", "Band Gap"])
+    fhandle = open(f"intercalation_data.txt","w")
+    for material in materials:
+        system = get_data(material, fhandle, addnl_folder_paths=["/expanse/lustre/scratch/sdutta3/temp_project/DMREF/bulk_calculation-forML/matminer"])
+        next_index = len(df)
+        df.loc[next_index] = system.data
+    os.chdir(root)
 
-        df = StrToComposition().featurize_dataframe(df, "formula")
+    df = StrToComposition().featurize_dataframe(df, "formula")
+
+    ep_feat = ElementProperty.from_preset(preset_name="magpie")
+    df = ep_feat.featurize_dataframe(df, col_id="composition")
     
-        ep_feat = ElementProperty.from_preset(preset_name="magpie")
-        df = ep_feat.featurize_dataframe(df, col_id="composition")
-        
-        df_feat = DensityFeatures()
-        df = df_feat.featurize_dataframe(df, col_id="structure")
+    df_feat = DensityFeatures()
+    df = df_feat.featurize_dataframe(df, col_id="structure")
 
-        mpe_feat = MaximumPackingEfficiency()
-        df = mpe_feat.featurize_dataframe(df, col_id="structure")
-        
-        df.to_pickle("cached_df.pkl")
-        f = open("code_hash.txt", "w")
-        f.write(compute_file_hash(__file__))
+    mpe_feat = MaximumPackingEfficiency()
+    df = mpe_feat.featurize_dataframe(df, col_id="structure")
+    
+    df.to_pickle("cached_df.pkl")
