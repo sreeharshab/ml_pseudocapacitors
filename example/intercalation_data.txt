@@ -1,0 +1,18 @@
+Material: Li3VO4, Formula: Li12V4O16:
+     Site       Li Intercalation Energy (eV) Average Li-M Distance Average Li-B Distance Average M-B Distance      Charge on Li             Charge on M             Charge on B      
+	Number of Li: 2
+       1                   -0.795                 3.019           1.984           1.783               0.841                   1.815                  -1.191         
+	Number of Li: 1
+       1                   -0.75                  3.057           1.973           1.76                  0                       0                       0           
+       2                    -0.6                  3.054           1.973           1.76                  0                       0                       0           
+       3                   -0.814                 3.053           1.969           1.759               0.847                   1.865                  -1.154         
+
+Material: MoO2, Formula: Mo4O8:
+     Site       Li Intercalation Energy (eV) Average Li-M Distance Average Li-B Distance Average M-B Distance      Charge on Li             Charge on M             Charge on B      
+	Number of Li: 2
+       1                   -1.627                 2.819           2.086           2.068               0.84                    1.71                   -1.065         
+       2                   -1.453                 2.759           2.04            2.068                 0                       0                       0           
+       3                   -1.627                 2.819           2.086           2.068                 0                       0                       0           
+	Number of Li: 1
+      C1                   -1.605                 2.787           2.052           2.046               0.83                    1.805                  -1.008         
+

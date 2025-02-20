@@ -21,7 +21,7 @@ B: Bridging elements
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 root = os.getcwd()
 
-class get_data:
+class get_features:
     def __init__(self, material, fhandle, addnl_folder_paths=None):
         self.material = material
         if addnl_folder_paths is None:
@@ -224,25 +224,20 @@ class get_data:
             data[0.5] = [0]*8
         return data[0.25]+data[0.5]
 
-if __name__=="__main__":
-    materials = ['Li3VO4', 'LiMn1.5Ni0.5O4', 'LiMn2O4', 'Mo3Nb2O14', 'MoO2', 'TiO2-B', 'TiO2-R', 'VO2-B', 'W3Nb2O14', 'Fe2CN6', 'LiCoO2', 'LiCoPO4', 'LiFe0.5Mg0.5PO4', 'LiFePO4', 'LiFeSO4F', 'LiNiO2', 'LiVPO5', 'MoS2', 'NCM333', 'NCM811', 'Nb2O5-R', 'Nb2O5-H', 'Nb2O5-T', 'Nb2O5-TT', 'NbS2', 'TiO2-A', 'TiS2', 'V2O5', 'V6O13', 'VO2-M', 'VO2-R', 'Li2FeSiO4', 'Li3V2O5']
+def get_df(materials):
     df = pd.DataFrame(columns=["material", "formula", "structure", "Lattice Parameter a", "Lattice Parameter b", "Lattice Parameter c", "Maximum Void Radius", "Average Li-M Distance", "Average Li-B Distance", "Average M-B Distance", "Charge on Li", "Charge on M", "Charge on B", "Band Gap", "Band Center", "Valence Band Center", "Conduction Band Center", "p Band Center", "Valence p Band Center", "Conduction p Band Center", "d Band Center", "Valence d Band Center", "Conduction d Band Center", "M p Band Center", "M Valence p Band Center", "M Conduction p Band Center", "M d Band Center", "M Valence d Band Center", "M Conduction d Band Center", "B p Band Center", "B Valence p Band Center", "B Conduction p Band Center", "Li Intercalation Energy @ 0.25 Li/M", "Volume Change @ 0.25 Li/M", "Average Li-M Distance @ 0.25 Li/M", "Average Li-B Distance @ 0.25 Li/M", "Average M-B Distance @ 0.25 Li/M", "Charge on Li @ 0.25 Li/M", "Charge on M @ 0.25 Li/M", "Charge on B @ 0.25 Li/M", "Li Intercalation Energy @ 0.50 Li/M", "Volume Change @ 0.50 Li/M", "Average Li-M Distance @ 0.50 Li/M", "Average Li-B Distance @ 0.50 Li/M", "Average M-B Distance @ 0.50 Li/M", "Charge on Li @ 0.50 Li/M", "Charge on M @ 0.50 Li/M", "Charge on B @ 0.50 Li/M"])
     fhandle = open(f"intercalation_data.txt","w")
     for material in materials:
-        system = get_data(material, fhandle)
+        features = get_features(material, fhandle)
         next_index = len(df)
-        df.loc[next_index] = system.data
+        df.loc[next_index] = features.data
     os.chdir(root)
-
     df = StrToComposition().featurize_dataframe(df, "formula")
-
     ep_feat = ElementProperty.from_preset(preset_name="magpie")
-    df = ep_feat.featurize_dataframe(df, col_id="composition")
-    
+    df = ep_feat.featurize_dataframe(df, col_id="composition") 
     df_feat = DensityFeatures()
     df = df_feat.featurize_dataframe(df, col_id="structure")
-
     mpe_feat = MaximumPackingEfficiency()
-    df = mpe_feat.featurize_dataframe(df, col_id="structure")
-    
+    df = mpe_feat.featurize_dataframe(df, col_id="structure") 
     df.to_pickle("cached_df.pkl")
+    return df

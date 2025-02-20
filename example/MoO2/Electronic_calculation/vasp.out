@@ -1,0 +1,49 @@
+ running on   64 total cores
+ distrk:  each k-point on   64 cores,    1 groups
+ distr:  one band on    8 cores,    8 groups
+ using from now: INCAR     
+ vasp.5.4.1 05Feb16 (build Apr 23 2022 14:15:44) complex                        
+  
+ POSCAR found type information on POSCAR  Mo O 
+ POSCAR found :  2 types and      12 ions
+ scaLAPACK will be used
+ LDA part: xc-table for Pade appr. of Perdew
+ POSCAR found type information on POSCAR  Mo O 
+ POSCAR found :  2 types and      12 ions
+
+ ----------------------------------------------------------------------------- 
+|                                                                             |
+|           W    W    AA    RRRRR   N    N  II  N    N   GGGG   !!!           |
+|           W    W   A  A   R    R  NN   N  II  NN   N  G    G  !!!           |
+|           W    W  A    A  R    R  N N  N  II  N N  N  G       !!!           |
+|           W WW W  AAAAAA  RRRRR   N  N N  II  N  N N  G  GGG   !            |
+|           WW  WW  A    A  R   R   N   NN  II  N   NN  G    G                |
+|           W    W  A    A  R    R  N    N  II  N    N   GGGG   !!!           |
+|                                                                             |
+|      The number of bands has been changed from the values supplied          |
+|      in the INCAR file. This is a result of running the parallel version.   |
+|      The orbitals not found in the WAVECAR file will be initialized with    |
+|      random numbers, which is usually adequate. For correlated              |
+|      calculations, however, you should redo the groundstate calculation.    |
+|      I found NBANDS    =       92  now  NBANDS  =      96                   |
+|                                                                             |
+ ----------------------------------------------------------------------------- 
+
+ found WAVECAR, reading the header
+  number of bands has changed, file:    56 present:    96
+  trying to continue reading WAVECAR, but it might fail
+ WARNING: stress and forces are not correct
+ POSCAR, INCAR and KPOINTS ok, starting setup
+ WARNING: small aliasing (wrap around) errors must be expected
+ FFT: planning ...
+ reading WAVECAR
+ random initialization beyond band           57
+ the WAVECAR file was read successfully
+ charge-density read from file: unknown                                 
+ magnetization density read from file 1
+ entering main loop
+       N       E                     dE             d eps       ncg     rms          rms(c)
+RMM:   1    -0.105857928814E+03   -0.10586E+03   -0.99660E-04 69302   0.664E-02
+RMM:   2    -0.105857930342E+03   -0.15284E-05   -0.15111E-05 67662   0.493E-03
+RMM:   3    -0.105857930379E+03   -0.37008E-07   -0.39096E-07 61180   0.906E-04
+   1 F= -.10882825E+03 E0= -.10882825E+03  d E =0.000000E+00  mag=     0.0000
