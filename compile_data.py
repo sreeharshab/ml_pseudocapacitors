@@ -2,15 +2,15 @@ import os
 import re
 import numpy as np
 import pandas as pd
-import hashlib
 import logging
 from pipelines import DOS
 from ase.io import read
 from ase.neighborlist import NeighborList, natural_cutoffs
-from matminer.featurizers.conversions import ASEAtomstoStructure, StrToComposition
+from matminer.featurizers.conversions import StrToComposition
 from matminer.featurizers.structure import DensityFeatures, MaximumPackingEfficiency
 from matminer.featurizers.composition import ElementProperty
 from pymatgen.analysis.local_env import VoronoiNN
+from pymatgen.io.ase import AseAtomsAdaptor
 
 """
 Li: Lithium
@@ -36,69 +36,34 @@ class get_data:
                 except FileNotFoundError:
                     pass
         self.atoms, self.energy = self.get_atoms_and_energy()
+        self.structure = AseAtomsAdaptor.get_structure(self.atoms)
         self.formula = str(self.atoms.symbols)
         logging.info(f"Material: {material}, Formula: {self.formula}")
         self.elements = re.findall(r'([A-Z][a-z]?)\d*', self.formula)
-        self.metals = self.get_metals()
-        self.bridging_elements = self.get_bridging_elements()
-        self.structure = self.get_PMG_structure()
+        self.metals = [metal for metal in self.elements if metal not in ["O", "S", "C", "N", "Si", "P", "F", "Li"]]
+        self.bridging_elements = [element for element in self.elements if element in ["O", "S", "C", "N", "Si", "P", "F"]]
+        self.lattice_parameters = list(self.atoms.cell.cellpar()[0:3]/self.atoms.get_volume())
         self.max_void_radius = self.get_max_void_radius()
-        self.intercalation_data = self.get_intercalation_data(fhandle)
+        self.distances = self.get_Li_M_B_distances(self.atoms)
+        self.charges = self.get_Li_M_B_charges()
+        if self.charges==[0,0,0]:
+            logging.warning(f"Bader charge calculation does not exist/is not completed for {self.material}.")
         self.dos_data = self.get_dos_data()
-        self.data = [material, self.formula, self.structure] + self.intercalation_data + [self.max_void_radius] + self.dos_data
+        self.intercalation_data = self.get_intercalation_data(fhandle)
+        self.data = [material, self.formula, self.structure] + self.lattice_parameters + [self.max_void_radius] + self.distances + self.charges + self.dos_data + self.intercalation_data
         os.chdir("../")
-    
-    def get_metals(self):
-        metals = [metal for metal in self.elements if metal not in ["O", "S", "C", "N", "Si", "P", "Li"]]
-        return metals
-    
-    def get_bridging_elements(self):
-        bridging_elements = [element for element in self.elements if element in ["O", "S", "C", "N", "Si", "P"]]
-        return bridging_elements
     
     def get_atoms_and_energy(self, dir_name="Energy_calculation"):
+        if not os.path.exists(dir_name):
+            raise FileNotFoundError(f"Energy calculation does not exist for {self.material}.")
         os.chdir(dir_name)
-        atoms = read("OUTCAR@-1")
-        energy = atoms.get_potential_energy()
+        try:
+            atoms = read("OUTCAR@-1")
+            energy = atoms.get_potential_energy()
+        except:
+            raise IOError(f"Failed to read OUTCAR from Energy calculation for {self.material}.")
         os.chdir("../")
         return atoms, energy
-    
-    def get_PMG_structure(self):
-        data = {
-            "ase atoms": [self.atoms]
-        }
-        df = pd.DataFrame(data)
-        conv = ASEAtomstoStructure()
-        df = conv.featurize_dataframe(df, "ase atoms", ignore_errors=True)
-        structure = df.at[0, "PMG Structure from ASE Atoms"]
-        return structure
-    
-    def get_dos_data(self):
-        try:
-            os.chdir("Electronic_calculation")
-            dos = DOS()
-            try:
-                dos.parse_doscar()
-                band_gap = dos.get_band_gap()
-                p_dos_up, p_dos_down = dos.get_orbital_projected_dos("p")
-                d_dos_up, d_dos_down = dos.get_orbital_projected_dos("d")
-                p_band_center = dos.get_band_center(p_dos_up, p_dos_down)    
-                d_band_center = dos.get_band_center(d_dos_up, d_dos_down)
-                indices = [atom.index for atom in self.atoms if atom.symbol in self.metals]
-                temp_dos_up, temp_dos_down = dos.get_select_atoms_orbital_projected_dos(indices,"p")
-                metal_cond_p_band_center = dos.get_band_center(dos_up=temp_dos_up, dos_down=temp_dos_down, energy_range=[0,dos.energies_wrt_fermi[-1]])
-                indices = [atom.index for atom in self.atoms if atom.symbol in self.bridging_elements]
-                temp_dos_up, temp_dos_down = dos.get_select_atoms_orbital_projected_dos(indices,"p")
-                brid_val_p_band_center = dos.get_band_center(dos_up=temp_dos_up, dos_down=temp_dos_down, energy_range=[dos.energies_wrt_fermi[0],0])
-                os.chdir("../")
-                return [band_gap, p_band_center, d_band_center, metal_cond_p_band_center, brid_val_p_band_center]
-            except AssertionError:
-                logging.warning(f"Electronic calculation is not completed for {self.material}. Taking band gap and band centers as 0...")
-                os.chdir("../")
-                return [0,0,0,0,0]
-        except FileNotFoundError:
-            logging.warning(f"Electronic calculation does not exist for {self.material}. Taking band gap and band centers as 0...")
-            return [0,0,0,0,0]
     
     def get_max_void_radius(self):
         def distance(coord1, coord2):
@@ -122,15 +87,16 @@ class get_data:
         nat_cut = natural_cutoffs(atoms, **kwargs)
         nl = NeighborList(nat_cut, self_interaction=False, bothways=True)
         nl.update(atoms)
-        Li_M_distances = []
-        Li_B_distances = []
-        M_B_distances = []
+        Li_M_distances, Li_B_distances, M_B_distances = [], [], []
         Li_indices = [atom.index for atom in atoms if atom.symbol=="Li"]
-        for Li_index in Li_indices:
-            indices, offsets = nl.get_neighbors(Li_index)
-            distances = np.linalg.norm(atoms.positions[indices] + offsets @ atoms.cell - atoms.positions[Li_index], axis=1)
-            Li_M_distances.append(distances[[atoms[i].symbol in self.metals for i in indices]].mean())
-            Li_B_distances.append(distances[[atoms[i].symbol in self.bridging_elements for i in indices]].mean())
+        if len(Li_indices)!=0:
+            for Li_index in Li_indices:
+                indices, offsets = nl.get_neighbors(Li_index)
+                distances = np.linalg.norm(atoms.positions[indices] + offsets @ atoms.cell - atoms.positions[Li_index], axis=1)
+                Li_M_distances.append(distances[[atoms[i].symbol in self.metals for i in indices]].mean())
+                Li_B_distances.append(distances[[atoms[i].symbol in self.bridging_elements for i in indices]].mean())
+        else:            
+            Li_M_distances, Li_B_distances = [0], [0]
         M_indices = [atom.index for atom in atoms if atom.symbol in self.metals]
         for M_index in M_indices:
             indices, offsets = nl.get_neighbors(M_index)
@@ -138,9 +104,9 @@ class get_data:
             M_B_distances.append(distances[[atoms[i].symbol in self.bridging_elements for i in indices]].mean())
         return [round(np.mean(Li_M_distances, axis=0),3), round(np.mean(Li_B_distances, axis=0),3), round(np.mean(M_B_distances, axis=0),3)]
     
-    def get_Li_M_B_charges(self):
+    def get_Li_M_B_charges(self, dir_name="Bader_calculation"):
         try:
-            os.chdir("bader")
+            os.chdir(dir_name)
             try:
                 atoms = read("with_charges.traj")
             except FileNotFoundError:
@@ -148,7 +114,10 @@ class get_data:
                 return [0,0,0]
             charges = atoms.get_initial_charges()
             Li_charges = charges[[atom.symbol=="Li" for atom in atoms]]
-            Li_charge = round(np.mean(Li_charges),3)
+            if len(Li_charges)!=0:
+                Li_charge = round(np.mean(Li_charges),3)
+            else:
+                Li_charge = 0
             M_charges = charges[[atom.symbol in self.metals for atom in atoms]]
             M_charge = round(np.mean(M_charges),3)
             B_charges = charges[[atom.symbol in self.bridging_elements for atom in atoms]]
@@ -158,59 +127,109 @@ class get_data:
         except FileNotFoundError:
             return [0,0,0]
     
+    def get_dos_data(self, dir_name="Electronic_calculation"):
+        def get_band_centers(dos_up, dos_down):
+            band_center = dos.get_band_center(dos_up, dos_down)
+            val_band_center = dos.get_band_center(dos_up=dos_up, dos_down=dos_down, energy_range=[dos.energies_wrt_fermi[0],0])
+            cond_band_center = dos.get_band_center(dos_up=dos_up, dos_down=dos_down, energy_range=[0,dos.energies_wrt_fermi[-1]])
+            return [band_center, val_band_center, cond_band_center]
+        try:
+            os.chdir(dir_name)
+            dos = DOS()
+            try:
+                dos.parse_doscar()
+                band_gap = dos.get_band_gap()
+                temp_dos_up, temp_dos_down = dos.get_total_dos()
+                band_centers = get_band_centers(temp_dos_up, temp_dos_down)
+                temp_dos_up, temp_dos_down = dos.get_orbital_projected_dos("p")
+                p_band_centers = get_band_centers(temp_dos_up, temp_dos_down)
+                temp_dos_up, temp_dos_down = dos.get_orbital_projected_dos("d")
+                d_band_centers = get_band_centers(temp_dos_up, temp_dos_down)
+                indices = [atom.index for atom in self.atoms if atom.symbol in self.metals]
+                temp_dos_up, temp_dos_down = dos.get_select_atoms_orbital_projected_dos(indices,"p")
+                metal_p_band_centers = get_band_centers(temp_dos_up, temp_dos_down)
+                temp_dos_up, temp_dos_down = dos.get_select_atoms_orbital_projected_dos(indices,"d")
+                metal_d_band_centers = get_band_centers(temp_dos_up, temp_dos_down)
+                indices = [atom.index for atom in self.atoms if atom.symbol in self.bridging_elements]
+                temp_dos_up, temp_dos_down = dos.get_select_atoms_orbital_projected_dos(indices,"p")
+                brid_p_band_centers = get_band_centers(temp_dos_up, temp_dos_down)
+                os.chdir("../")
+                return [band_gap] + band_centers + p_band_centers + d_band_centers + metal_p_band_centers + metal_d_band_centers + brid_p_band_centers
+            except AssertionError:
+                logging.warning(f"Electronic calculation is not completed for {self.material}. Taking band gap and band centers as 0...")
+                os.chdir("../")
+                return [0]*19
+        except FileNotFoundError:
+            logging.warning(f"Electronic calculation does not exist for {self.material}. Taking band gap and band centers as 0...")
+            return [0]*19
+    
     def get_intercalation_data(self, fhandle):
         atoms = self.atoms
         energy = self.energy
         volume = atoms.get_volume()
-        n_M = len([atom.index for atom in atoms if atom.symbol in self.metals])
+        n_M = sum(1 for atom in atoms if atom.symbol in self.metals)
         fhandle.write(f"Material: {self.material}, Formula: {self.formula}:\n")
-        os.chdir("Intercalation")
-        oswalk = [i for i in os.walk(".")]
-        nLifolders = sorted(oswalk[0][1])
         str_format = "{:^15} {:^28} {:^15} {:^15} {:^15} {:^23} {:^23} {:^23}\n"
-        fhandle.write(str_format.format("Site", "Li Intercalation Energy (eV)", "Charge on Li", "Charge on M", "Charge on B", "Average Li-M Distance", "Average Li-B Distance", "Average M-B Distance"))
+        fhandle.write(str_format.format("Site", "Li Intercalation Energy (eV)", "Average Li-M Distance", "Average Li-B Distance", "Average M-B Distance", "Charge on Li", "Charge on M", "Charge on B"))
+        data = {}
+        nLifolders = [entry.name for entry in os.scandir("Intercalation") if entry.is_dir()]
+        os.chdir("Intercalation")
         for nLifolder in nLifolders:
             match = re.match(r"(\d+)_Li", nLifolder)
             n_Li = int(match.group(1))
-            if n_Li/n_M == 0.25 or n_Li/n_M == 0.5:
-                fhandle.write(f"\tNumber of Li: {n_Li}\n")
-                os.chdir(nLifolder)
-                oswalk = [i for i in os.walk(".")]
-                sites = sorted(oswalk[0][1])
-                Li_energies, volume_changes, Li_charges, M_charges, B_charges, Li_M_distances, Li_B_distances, M_B_distances = [], [], [], [], [], [], [], []
-                for site in sites:
-                    os.chdir(f"{site}")
+            if n_Li/n_M not in [0.25,0.5]:
+                continue
+            fhandle.write(f"\tNumber of Li: {n_Li}\n")
+            os.chdir(nLifolder)
+            oswalk = [i for i in os.walk(".")]
+            sites = sorted(oswalk[0][1])
+            Li_energies, volume_changes, Li_M_distances, Li_B_distances, M_B_distances, Li_charges, M_charges, B_charges = [], [], [], [], [], [], [], []
+            for site in sites:
+                os.chdir(f"{site}")
+                try:
                     atoms_with_Li, energy_with_Li = self.get_atoms_and_energy("geo_opt")
-                    volume_with_Li = atoms_with_Li.get_volume()
-                    mu_Li = -33.22057791/16 # From DFT calculation.
-                    Li_energy = round((energy_with_Li-energy-n_Li*mu_Li)/(n_Li),3)
-                    volume_change = volume_with_Li - volume
-                    Li_M_B_distances = self.get_Li_M_B_distances(atoms_with_Li)
-                    Li_M_B_charges = self.get_Li_M_B_charges()
-                    fhandle.write(str_format.format(site, Li_energy, Li_M_B_charges[0], Li_M_B_charges[1], Li_M_B_charges[2], Li_M_B_distances[0], Li_M_B_distances[1], Li_M_B_distances[2]))
-                    lists = [Li_energies, volume_changes, Li_charges, M_charges, B_charges, Li_M_distances, Li_B_distances, M_B_distances]
-                    values = [Li_energy, volume_change]+Li_M_B_charges+Li_M_B_distances
-                    for lst, val in zip(lists, values):
-                        lst.append(val)
-                    os.chdir("../")
-                mLei = Li_energies.index(min(Li_energies))  # mLei: minimum Li energy index
-                if Li_charges[mLei]==0:
-                    logging.warning(f"Li charge not available at {nLifolder}. Taking it as 0...")
-                if n_Li/n_M == 0.25:
-                    data_25 = [Li_energies[mLei], volume_changes[mLei], Li_charges[mLei], M_charges[mLei], B_charges[mLei], Li_M_distances[mLei], Li_B_distances[mLei], M_B_distances[mLei]]
-                elif n_Li/n_M == 0.5:
-                    data_50 = [Li_energies[mLei], volume_changes[mLei], Li_charges[mLei], M_charges[mLei], B_charges[mLei], Li_M_distances[mLei], Li_B_distances[mLei], M_B_distances[mLei]]
+                except FileNotFoundError:
+                    continue
+                volume_with_Li = atoms_with_Li.get_volume()
+                mu_Li = -33.22057791/16 # From DFT calculation.
+                Li_energy = round((energy_with_Li-energy-n_Li*mu_Li)/(n_Li),3)
+                volume_change = (volume_with_Li - volume)/volume
+                Li_M_B_distances = self.get_Li_M_B_distances(atoms_with_Li)
+                try:
+                    Li_M_B_charges = self.get_Li_M_B_charges("bader")
+                except FileNotFoundError:
+                    Li_M_B_charges = [0,0,0]
+                fhandle.write(str_format.format(site, Li_energy, Li_M_B_distances[0], Li_M_B_distances[1], Li_M_B_distances[2], Li_M_B_charges[0], Li_M_B_charges[1], Li_M_B_charges[2]))
+                lists = [Li_energies, volume_changes, Li_M_distances, Li_B_distances, M_B_distances, Li_charges, M_charges, B_charges]
+                values = [Li_energy, volume_change]+Li_M_B_distances+Li_M_B_charges
+                for lst, val in zip(lists, values):
+                    lst.append(val)
                 os.chdir("../")
+            mLei = Li_energies.index(min(Li_energies))  # mLei: minimum Li energy index
+            if Li_charges[mLei]==0:
+                logging.warning(f"Li charge is not available at {nLifolder}. Taking it as 0...")
+            data[n_Li/n_M] = [Li_energies[mLei], volume_changes[mLei], Li_M_distances[mLei], Li_B_distances[mLei], M_B_distances[mLei], Li_charges[mLei], M_charges[mLei], B_charges[mLei]]
+            os.chdir("../")
         os.chdir("../")
         fhandle.write("\n")
-        return data_25+data_50
+        try:
+            data[0.25]
+        except KeyError:
+            logging.warning(f"Intercalation data does not exist for 0.25 Li/M. Taking values as 0...")
+            data[0.25] = [0]*8
+        try:
+            data[0.5]
+        except KeyError:
+            logging.warning(f"Intercalation data does not exist for 0.5 Li/M. Taking values as 0...")
+            data[0.5] = [0]*8
+        return data[0.25]+data[0.5]
 
 if __name__=="__main__":
-    materials = ['Li3VO4', 'LiMn1.5Ni0.5O4', 'LiMn2O4', 'Mo3Nb2O14', 'MoO2', 'TiO2-B', 'TiO2-R', 'VO2-B', 'W3Nb2O14', 'Fe2CN6', 'LiCoO2', 'LiCoPO4', 'LiFeMgPO4', 'LiFePO4', 'LiFeSO4F', 'LiNiO2', 'LiVPO5', 'MoS2', 'NCM333', 'NCM811', 'Nb2O5-R', 'Nb2O5-H', 'Nb2O5-T', 'Nb2O5-TT', 'NbS2', 'TiO2-anatase', 'TiS2', 'V2O5', 'V6O13', 'VO2-M', 'VO2-R', 'Li2FeSiO4', 'Li3+xV2O5']
-    df = pd.DataFrame(columns=["material", "formula", "structure", "Li Intercalation Energy @ 0.25 Li/M", "Volume Change @ 0.25 Li/M", "Charge on Li @ 0.25 Li/M", "Charge on M @ 0.25 Li/M", "Charge on B @ 0.25 Li/M", f"Average Li-M Distance @ 0.25 Li/M", f"Average Li-B Distance @ 0.25 Li/M", f"Average M-B Distance @ 0.25 Li/M", "Li Intercalation Energy @ 0.50 Li/M", "Volume Change @ 0.50 Li/M", "Charge on Li @ 0.50 Li/M", "Charge on M @ 0.50 Li/M", "Charge on B @ 0.50 Li/M", f"Average Li-M Distance @ 0.50 Li/M", f"Average Li-B Distance @ 0.50 Li/M", f"Average M-B Distance @ 0.50 Li/M", "Maximum Void Radius", "Band Gap", "p Band Center", "d Band Center", "M Conduction p Band Center", "B Valence p Band Center"])
+    materials = ['Li3VO4', 'LiMn1.5Ni0.5O4', 'LiMn2O4', 'Mo3Nb2O14', 'MoO2', 'TiO2-B', 'TiO2-R', 'VO2-B', 'W3Nb2O14', 'Fe2CN6', 'LiCoO2', 'LiCoPO4', 'LiFe0.5Mg0.5PO4', 'LiFePO4', 'LiFeSO4F', 'LiNiO2', 'LiVPO5', 'MoS2', 'NCM333', 'NCM811', 'Nb2O5-R', 'Nb2O5-H', 'Nb2O5-T', 'Nb2O5-TT', 'NbS2', 'TiO2-A', 'TiS2', 'V2O5', 'V6O13', 'VO2-M', 'VO2-R', 'Li2FeSiO4', 'Li3V2O5']
+    df = pd.DataFrame(columns=["material", "formula", "structure", "Lattice Parameter a", "Lattice Parameter b", "Lattice Parameter c", "Maximum Void Radius", "Average Li-M Distance", "Average Li-B Distance", "Average M-B Distance", "Charge on Li", "Charge on M", "Charge on B", "Band Gap", "Band Center", "Valence Band Center", "Conduction Band Center", "p Band Center", "Valence p Band Center", "Conduction p Band Center", "d Band Center", "Valence d Band Center", "Conduction d Band Center", "M p Band Center", "M Valence p Band Center", "M Conduction p Band Center", "M d Band Center", "M Valence d Band Center", "M Conduction d Band Center", "B p Band Center", "B Valence p Band Center", "B Conduction p Band Center", "Li Intercalation Energy @ 0.25 Li/M", "Volume Change @ 0.25 Li/M", "Average Li-M Distance @ 0.25 Li/M", "Average Li-B Distance @ 0.25 Li/M", "Average M-B Distance @ 0.25 Li/M", "Charge on Li @ 0.25 Li/M", "Charge on M @ 0.25 Li/M", "Charge on B @ 0.25 Li/M", "Li Intercalation Energy @ 0.50 Li/M", "Volume Change @ 0.50 Li/M", "Average Li-M Distance @ 0.50 Li/M", "Average Li-B Distance @ 0.50 Li/M", "Average M-B Distance @ 0.50 Li/M", "Charge on Li @ 0.50 Li/M", "Charge on M @ 0.50 Li/M", "Charge on B @ 0.50 Li/M"])
     fhandle = open(f"intercalation_data.txt","w")
     for material in materials:
-        system = get_data(material, fhandle, addnl_folder_paths=["/expanse/lustre/scratch/sdutta3/temp_project/DMREF/bulk_calculation-forML/matminer"])
+        system = get_data(material, fhandle)
         next_index = len(df)
         df.loc[next_index] = system.data
     os.chdir(root)
