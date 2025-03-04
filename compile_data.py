@@ -47,7 +47,7 @@ class get_features:
         self.distances = self.get_Li_M_B_distances(self.atoms)
         self.charges = self.get_Li_M_B_charges()
         if self.charges==[0,0,0]:
-            logging.warning(f"Bader charge calculation does not exist/is not completed for {self.material}.")
+            logging.warning(f"Bader_calculation does not exist/is not completed at {os.getcwd()}.")
         self.dos_data = self.get_dos_data()
         self.intercalation_data = self.get_intercalation_data(fhandle)
         self.data = [material, self.formula, self.structure] + self.lattice_parameters + [self.max_void_radius] + self.distances + self.charges + self.dos_data + self.intercalation_data
@@ -55,13 +55,13 @@ class get_features:
     
     def get_atoms_and_energy(self, dir_name="Energy_calculation"):
         if not os.path.exists(dir_name):
-            raise FileNotFoundError(f"Energy calculation does not exist for {self.material}.")
+            raise FileNotFoundError(f"{dir_name} does not exist at {os.getcwd()}.")
         os.chdir(dir_name)
         try:
             atoms = read("OUTCAR@-1")
             energy = atoms.get_potential_energy()
         except:
-            raise IOError(f"Failed to read OUTCAR from Energy calculation for {self.material}.")
+            raise IOError(f"Failed to read OUTCAR from {dir_name} at {os.getcwd()}.")
         os.chdir("../")
         return atoms, energy
     
@@ -156,11 +156,11 @@ class get_features:
                 os.chdir("../")
                 return [band_gap] + band_centers + p_band_centers + d_band_centers + metal_p_band_centers + metal_d_band_centers + brid_p_band_centers
             except AssertionError:
-                logging.warning(f"Electronic calculation is not completed for {self.material}. Taking band gap and band centers as 0...")
+                logging.warning(f"{dir_name} is not completed at {os.getcwd()}. Taking band gap and band centers as 0...")
                 os.chdir("../")
                 return [0]*19
         except FileNotFoundError:
-            logging.warning(f"Electronic calculation does not exist for {self.material}. Taking band gap and band centers as 0...")
+            logging.warning(f"{dir_name} does not exist at {os.getcwd()}. Taking band gap and band centers as 0...")
             return [0]*19
     
     def get_intercalation_data(self, fhandle):
@@ -207,7 +207,7 @@ class get_features:
                 os.chdir("../")
             mLei = Li_energies.index(min(Li_energies))  # mLei: minimum Li energy index
             if Li_charges[mLei]==0:
-                logging.warning(f"Li charge is not available at {nLifolder}. Taking it as 0...")
+                logging.warning(f"bader does not exist/is not completed at {os.getcwd()}/{sites[mLei]}. Taking it as 0...")
             data[n_Li/n_M] = [Li_energies[mLei], volume_changes[mLei], Li_M_distances[mLei], Li_B_distances[mLei], M_B_distances[mLei], Li_charges[mLei], M_charges[mLei], B_charges[mLei]]
             os.chdir("../")
         os.chdir("../")
@@ -215,12 +215,12 @@ class get_features:
         try:
             data[0.25]
         except KeyError:
-            logging.warning(f"Intercalation data does not exist for 0.25 Li/M. Taking values as 0...")
+            logging.warning(f"Intercalation data does not exist for 0.25 Li/M at {os.getcwd()}. Taking values as 0...")
             data[0.25] = [0]*8
         try:
             data[0.5]
         except KeyError:
-            logging.warning(f"Intercalation data does not exist for 0.5 Li/M. Taking values as 0...")
+            logging.warning(f"Intercalation data does not exist for 0.5 Li/M at {os.getcwd()}. Taking values as 0...")
             data[0.5] = [0]*8
         return data[0.25]+data[0.5]
 
