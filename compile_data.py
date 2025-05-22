@@ -47,8 +47,10 @@ class get_features:
         self.distances = self.get_Li_M_B_distances(self.atoms)
         self.charges = self.get_Li_M_B_charges()
         if self.charges==[0,0,0]:
-            logging.warning(f"Bader_calculation does not exist/is not completed at {os.getcwd()}.")
+            logging.warning(f"Bader_calculation does not exist/is not completed at {os.getcwd()}. Taking charges as 0...")
         self.dos_data = self.get_dos_data()
+        if self.dos_data==[0]*19:
+            logging.warning(f"Electronic_calculation does not exist/is not completed at {os.getcwd()}. Taking band gap and band centers as 0...")
         self.intercalation_data = self.get_intercalation_data(fhandle)
         self.data = [material, self.formula, self.structure] + self.lattice_parameters + [self.max_void_radius] + self.distances + self.charges + self.dos_data + self.intercalation_data
         os.chdir("../")
@@ -156,11 +158,9 @@ class get_features:
                 os.chdir("../")
                 return [band_gap] + band_centers + p_band_centers + d_band_centers + metal_p_band_centers + metal_d_band_centers + brid_p_band_centers
             except AssertionError:
-                logging.warning(f"{dir_name} is not completed at {os.getcwd()}. Taking band gap and band centers as 0...")
                 os.chdir("../")
                 return [0]*19
         except FileNotFoundError:
-            logging.warning(f"{dir_name} does not exist at {os.getcwd()}. Taking band gap and band centers as 0...")
             return [0]*19
     
     def get_intercalation_data(self, fhandle):
@@ -168,6 +168,8 @@ class get_features:
         energy = self.energy
         volume = atoms.get_volume()
         n_M = sum(1 for atom in atoms if atom.symbol in self.metals)
+        if self.material=="Li7NbS2":
+            n_M = 8
         fhandle.write(f"Material: {self.material}, Formula: {self.formula}:\n")
         str_format = "{:^15} {:^28} {:^15} {:^15} {:^15} {:^23} {:^23} {:^23}\n"
         fhandle.write(str_format.format("Site", "Li Intercalation Energy (eV)", "Average Li-M Distance", "Average Li-B Distance", "Average M-B Distance", "Charge on Li", "Charge on M", "Charge on B"))
@@ -176,14 +178,17 @@ class get_features:
         os.chdir("Intercalation")
         for nLifolder in nLifolders:
             match = re.match(r"(\d+)_Li", nLifolder)
-            n_Li = int(match.group(1))
-            if n_Li/n_M not in [0.25,0.5]:
+            if match:
+                n_Li = int(match.group(1))
+            else:
+                n_Li = 0
+            if not (0.25<=n_Li/n_M<=0.3 or n_Li/n_M==0.5):
                 continue
             fhandle.write(f"\tNumber of Li: {n_Li}\n")
             os.chdir(nLifolder)
             oswalk = [i for i in os.walk(".")]
             sites = sorted(oswalk[0][1])
-            Li_energies, volume_changes, Li_M_distances, Li_B_distances, M_B_distances, Li_charges, M_charges, B_charges = [], [], [], [], [], [], [], []
+            Li_energies, volume_changes, Li_M_distances, Li_B_distances, M_B_distances, Li_charges, M_charges, B_charges, B_val_band_centers, B_cond_band_centers = [], [], [], [], [], [], [], [], [], []
             for site in sites:
                 os.chdir(f"{site}")
                 try:
@@ -199,16 +204,21 @@ class get_features:
                     Li_M_B_charges = self.get_Li_M_B_charges("bader")
                 except FileNotFoundError:
                     Li_M_B_charges = [0,0,0]
+                B_val_cond_band_centers = self.get_dos_data(dir_name="dos")[17:19]
                 fhandle.write(str_format.format(site, Li_energy, Li_M_B_distances[0], Li_M_B_distances[1], Li_M_B_distances[2], Li_M_B_charges[0], Li_M_B_charges[1], Li_M_B_charges[2]))
-                lists = [Li_energies, volume_changes, Li_M_distances, Li_B_distances, M_B_distances, Li_charges, M_charges, B_charges]
-                values = [Li_energy, volume_change]+Li_M_B_distances+Li_M_B_charges
+                lists = [Li_energies, volume_changes, Li_M_distances, Li_B_distances, M_B_distances, Li_charges, M_charges, B_charges, B_val_band_centers, B_cond_band_centers]
+                values = [Li_energy, volume_change]+Li_M_B_distances+Li_M_B_charges+B_val_cond_band_centers
                 for lst, val in zip(lists, values):
                     lst.append(val)
                 os.chdir("../")
             mLei = Li_energies.index(min(Li_energies))  # mLei: minimum Li energy index
-            if Li_charges[mLei]==0:
-                logging.warning(f"bader does not exist/is not completed at {os.getcwd()}/{sites[mLei]}. Taking it as 0...")
-            data[n_Li/n_M] = [Li_energies[mLei], volume_changes[mLei], Li_M_distances[mLei], Li_B_distances[mLei], M_B_distances[mLei], Li_charges[mLei], M_charges[mLei], B_charges[mLei]]
+            if (Li_charges[mLei]==0 and M_charges[mLei]==0 and B_charges[mLei]==0):
+                logging.warning(f"bader does not exist/is not completed at {os.getcwd()}/{sites[mLei]}. Taking charges as 0...")
+            if (B_val_band_centers[mLei]==0 and B_cond_band_centers[mLei]==0):
+                logging.warning(f"dos does not exist/is not completed at {os.getcwd()}/{sites[mLei]}. Taking band centers as 0...")
+            data[round(n_Li/n_M,2)] = [Li_energies[mLei], volume_changes[mLei], Li_M_distances[mLei], Li_B_distances[mLei], M_B_distances[mLei], Li_charges[mLei], M_charges[mLei], B_charges[mLei], B_val_band_centers[mLei], B_cond_band_centers[mLei]]
+            if 0.25<=n_Li/n_M<=0.3:
+                data[0.25] = data[round(n_Li/n_M,2)]
             os.chdir("../")
         os.chdir("../")
         fhandle.write("\n")
@@ -216,16 +226,16 @@ class get_features:
             data[0.25]
         except KeyError:
             logging.warning(f"Intercalation data does not exist for 0.25 Li/M at {os.getcwd()}. Taking values as 0...")
-            data[0.25] = [0]*8
+            data[0.25] = [0]*10
         try:
             data[0.5]
         except KeyError:
             logging.warning(f"Intercalation data does not exist for 0.5 Li/M at {os.getcwd()}. Taking values as 0...")
-            data[0.5] = [0]*8
+            data[0.5] = [0]*10
         return data[0.25]+data[0.5]
 
 def get_df(materials):
-    df = pd.DataFrame(columns=["material", "formula", "structure", "Lattice Parameter a", "Lattice Parameter b", "Lattice Parameter c", "Maximum Void Radius", "Average Li-M Distance", "Average Li-B Distance", "Average M-B Distance", "Charge on Li", "Charge on M", "Charge on B", "Band Gap", "Band Center", "Valence Band Center", "Conduction Band Center", "p Band Center", "Valence p Band Center", "Conduction p Band Center", "d Band Center", "Valence d Band Center", "Conduction d Band Center", "M p Band Center", "M Valence p Band Center", "M Conduction p Band Center", "M d Band Center", "M Valence d Band Center", "M Conduction d Band Center", "B p Band Center", "B Valence p Band Center", "B Conduction p Band Center", "Li Intercalation Energy @ 0.25 Li/M", "Volume Change @ 0.25 Li/M", "Average Li-M Distance @ 0.25 Li/M", "Average Li-B Distance @ 0.25 Li/M", "Average M-B Distance @ 0.25 Li/M", "Charge on Li @ 0.25 Li/M", "Charge on M @ 0.25 Li/M", "Charge on B @ 0.25 Li/M", "Li Intercalation Energy @ 0.50 Li/M", "Volume Change @ 0.50 Li/M", "Average Li-M Distance @ 0.50 Li/M", "Average Li-B Distance @ 0.50 Li/M", "Average M-B Distance @ 0.50 Li/M", "Charge on Li @ 0.50 Li/M", "Charge on M @ 0.50 Li/M", "Charge on B @ 0.50 Li/M"])
+    df = pd.DataFrame(columns=["material", "formula", "structure", "Lattice Parameter a", "Lattice Parameter b", "Lattice Parameter c", "Maximum Void Radius", "Average Li-M Distance", "Average Li-B Distance", "Average M-B Distance", "Charge on Li", "Charge on M", "Charge on B", "Band Gap", "Band Center", "Valence Band Center", "Conduction Band Center", "p Band Center", "Valence p Band Center", "Conduction p Band Center", "d Band Center", "Valence d Band Center", "Conduction d Band Center", "M p Band Center", "M Valence p Band Center", "M Conduction p Band Center", "M d Band Center", "M Valence d Band Center", "M Conduction d Band Center", "B p Band Center", "B Valence p Band Center", "B Conduction p Band Center", "Li Intercalation Energy @ 0.25 Li/M", "Volume Change @ 0.25 Li/M", "Average Li-M Distance @ 0.25 Li/M", "Average Li-B Distance @ 0.25 Li/M", "Average M-B Distance @ 0.25 Li/M", "Charge on Li @ 0.25 Li/M", "Charge on M @ 0.25 Li/M", "Charge on B @ 0.25 Li/M", "B Valence p Band Center @ 0.25 Li/M", "B Conduction p Band Center @ 0.25 Li/M", "Li Intercalation Energy @ 0.50 Li/M", "Volume Change @ 0.50 Li/M", "Average Li-M Distance @ 0.50 Li/M", "Average Li-B Distance @ 0.50 Li/M", "Average M-B Distance @ 0.50 Li/M", "Charge on Li @ 0.50 Li/M", "Charge on M @ 0.50 Li/M", "Charge on B @ 0.50 Li/M", "B Valence p Band Center @ 0.50 Li/M", "B Conduction p Band Center @ 0.50 Li/M"])
     fhandle = open(f"intercalation_data.txt","w")
     for material in materials:
         features = get_features(material, fhandle)
